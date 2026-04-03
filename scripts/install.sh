@@ -106,8 +106,9 @@ for f in "${CORE_SKILLS[@]}"; do
 done
 
 # --- WASM interpreter ---
-info "Downloading WASM Python interpreter (~30MB, may take a moment)"
-dl "wasm-interpreters/python-3.11.4.wasm" "${REPO_RAW}/wasm-interpreters/python-3.11.4.wasm"
+info "Downloading WASM Python interpreter (~20MB, may take a moment)"
+WASM_URL="https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.11.4%2B20230714-11be424/python-3.11.4.wasm"
+dl "wasm-interpreters/python-3.11.4.wasm" "$WASM_URL"
 
 # --- Database migrations ---
 info "Downloading database migrations"

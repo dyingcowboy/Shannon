@@ -41,7 +41,7 @@ WAF_BLOCK_TITLES = {"access denied", "403 forbidden", "attention required", "jus
 # Proxy requests need longer timeout (residential proxy adds latency)
 PROXY_TIMEOUT_MS = int(os.getenv("PROXY_TIMEOUT_MS", "60000"))
 
-# Configuration (read from environment variables set by Helm)
+# Configuration (read from environment variables)
 MAX_CONCURRENT_BROWSERS = int(os.getenv("MAX_CONCURRENT_BROWSERS", "2"))
 MAX_CONCURRENT_ACTIONS = int(
     os.getenv("MAX_CONCURRENT_ACTIONS", str(MAX_CONCURRENT_BROWSERS * 5))

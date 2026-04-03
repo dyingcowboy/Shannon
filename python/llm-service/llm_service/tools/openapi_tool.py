@@ -163,7 +163,7 @@ class OpenAPILoader:
             max_response_bytes: Max response size (default: 10MB)
             retries: Max retry attempts (default: 2, reduced to avoid circuit breaker)
             spec_url: Optional URL where spec was fetched from (for relative server URLs)
-            vendor_name: Optional vendor adapter name (e.g., "ptengine")
+            vendor_name: Optional vendor adapter name
         """
         self.name = name
         self.spec = spec

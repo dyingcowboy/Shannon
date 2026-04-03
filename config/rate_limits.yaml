@@ -17,10 +17,6 @@ tiers:
     requests_per_minute: 300
     requests_per_hour: 10000
     requests_per_day: 100000
-  enterprise:
-    requests_per_minute: 500
-    requests_per_hour: 20000
-    requests_per_day: 200000
   admin:
     requests_per_minute: 1000
     requests_per_hour: 100000

@@ -106,7 +106,5 @@ func TestStrategiesBasicWorkflows(t *testing.T) {
 func TestCognitiveWrappersExist(t *testing.T) {
 	// Verify wrapper functions are available
 	assert.NotNil(t, ExploratoryWorkflow)
-	assert.NotNil(t, ReactWorkflow)
-	assert.NotNil(t, ResearchWorkflow)
 	assert.NotNil(t, ScientificWorkflow)
 }

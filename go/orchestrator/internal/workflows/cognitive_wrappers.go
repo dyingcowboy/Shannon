@@ -6,40 +6,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// ReactWorkflow is a wrapper for strategies.ReactWorkflow to maintain test compatibility
-func ReactWorkflow(ctx workflow.Context, input TaskInput) (TaskResult, error) {
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
-	})
-	strategiesInput := convertToStrategiesInput(input)
-	var strategiesResult strategies.TaskResult
-	err := workflow.ExecuteChildWorkflow(childCtx, strategies.ReactWorkflow, strategiesInput).Get(childCtx, &strategiesResult)
-	if err != nil {
-		return TaskResult{}, err
-	}
-	return convertFromStrategiesResult(strategiesResult), nil
-}
-
-// ResearchWorkflow is a wrapper for strategies.ResearchWorkflow to maintain test compatibility
-func ResearchWorkflow(ctx workflow.Context, input TaskInput) (TaskResult, error) {
-	childOpts := workflow.ChildWorkflowOptions{
-		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
-	}
-	v := workflow.GetVersion(ctx, "research_child_timeout_v1", workflow.DefaultVersion, 1)
-	if v >= 1 {
-		childOpts.WorkflowExecutionTimeout = ResearchChildWorkflowTimeout
-	}
-	childCtx := workflow.WithChildOptions(ctx, childOpts)
-	strategiesInput := convertToStrategiesInput(input)
-	var strategiesResult strategies.TaskResult
-	err := workflow.ExecuteChildWorkflow(childCtx, strategies.ResearchWorkflow, strategiesInput).Get(childCtx, &strategiesResult)
-	if err != nil {
-		return TaskResult{}, err
-	}
-	return convertFromStrategiesResult(strategiesResult), nil
-}
-
-// ExploratoryWorkflow is a wrapper for strategies.ExploratoryWorkflow to maintain test compatibility
+// ExploratoryWorkflow is a wrapper for strategies.ExploratoryWorkflow
 func ExploratoryWorkflow(ctx workflow.Context, input TaskInput) (TaskResult, error) {
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
@@ -67,16 +34,3 @@ func ScientificWorkflow(ctx workflow.Context, input TaskInput) (TaskResult, erro
 	return convertFromStrategiesResult(strategiesResult), nil
 }
 
-// AgentDAGWorkflow is a wrapper for strategies.DAGWorkflow to maintain test compatibility
-func AgentDAGWorkflow(ctx workflow.Context, input TaskInput) (TaskResult, error) {
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
-	})
-	strategiesInput := convertToStrategiesInput(input)
-	var strategiesResult strategies.TaskResult
-	err := workflow.ExecuteChildWorkflow(childCtx, strategies.DAGWorkflow, strategiesInput).Get(childCtx, &strategiesResult)
-	if err != nil {
-		return TaskResult{}, err
-	}
-	return convertFromStrategiesResult(strategiesResult), nil
-}

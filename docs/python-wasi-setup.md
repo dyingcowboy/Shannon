@@ -1,6 +1,6 @@
 # Python WASI Setup Guide for Shannon
 
-> **Scope**: This guide covers **local development** (Docker Compose) only. On EKS, Python execution uses Firecracker microVMs with pre-installed data science packages (pandas, numpy, scipy, torch, etc.) — the WASI interpreter is not used. See [`docs/workspace-efs-persistence.md`](workspace-efs-persistence.md) for the EKS architecture.
+> **Scope**: This guide covers **local development** (Docker Compose) only. On EKS, Python execution uses Firecracker microVMs with pre-installed data science packages (pandas, numpy, scipy, torch, etc.) — the WASI interpreter is not used.
 
 ## Quick Setup
 

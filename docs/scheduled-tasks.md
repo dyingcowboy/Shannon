@@ -25,7 +25,7 @@ User → Gateway → Orchestrator gRPC → Schedule Manager → Temporal Schedul
 
 - **Schedule Manager** (`internal/schedules/manager.go`): Business logic, Temporal API integration, resource limit enforcement
 - **ScheduledTaskWorkflow** (`internal/workflows/scheduled/`): Wrapper workflow that tracks execution, enforces tenant quota, and delegates to existing workflows
-- **QuotaActivities** (`internal/activities/quota_activities.go`): Temporal activities for tenant quota enforcement (`CheckTenantQuota`, `RecordTenantQuotaUsage`, `EmitQuotaExceededEvent`)
+- **Schedule Activities** (`internal/activities/schedule_activities.go`): Temporal activities including `PauseScheduleForQuota` for quota enforcement
 - **Database Tables**:
   - `scheduled_tasks`: Schedule configuration (cron, query, budget, etc.)
   - `scheduled_task_executions`: Execution history with timestamps, status, cost

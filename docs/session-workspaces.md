@@ -21,7 +21,7 @@ Shannon uses **different Python sandbox backends** depending on the environment:
 | **File persistence** | `file_*` tools + `python_executor` write to session dir on Docker volume | `file_*` tools + `python_executor` both write to EFS (with bi-directional sync) |
 | **Isolation** | WASI capability-based (wasmtime preopened dirs) | Hardware-level VM isolation |
 
-**This document describes the local Docker Compose path.** For EKS Firecracker workspace persistence, see [`docs/workspace-efs-persistence.md`](workspace-efs-persistence.md).
+**This document describes the local Docker Compose path.**
 
 ## Role Requirements for File Tools
 
@@ -507,7 +507,7 @@ Both `python_executor` and `file_*` tools can read/write the session workspace w
 - **`python_executor`**: Sees the workspace as `/workspace/` inside the sandbox. On local WASI, the session directory is mounted via wasmtime's preopened dir with full read-write permissions (`DirPerms::all()`). On EKS, the Firecracker VM mounts the ext4 at `/workspace/`. Without a `session_id`, no `/workspace` mount exists and writes fail.
 - **`file_*` tools**: Write directly to the session directory on the host via the Rust SandboxService (gRPC). Always writable when a `session_id` is provided.
 
-**On EKS**, both tools access the same EFS-backed ext4, with bi-directional sync between the session directory and the ext4 image. See [`docs/workspace-efs-persistence.md`](workspace-efs-persistence.md).
+**On EKS**, both tools access the same EFS-backed ext4, with bi-directional sync between the session directory and the ext4 image.
 
 ## Key Source Files
 

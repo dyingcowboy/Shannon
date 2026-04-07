@@ -131,18 +131,7 @@ func LimitForProvider(provider string) RateLimit {
 			return RateLimit{RPM: override.RPM, TPM: override.TPM}
 		}
 	}
-	if limit, ok := builtInProviderLimits[strings.ToLower(strings.TrimSpace(provider))]; ok {
-		return limit
-	}
 	return RateLimit{}
-}
-
-var builtInProviderLimits = map[string]RateLimit{
-	"openai":    {RPM: 30, TPM: 60000},
-	"anthropic": {RPM: 20, TPM: 40000},
-	"google":    {RPM: 40, TPM: 80000},
-	"meta":      {RPM: 60, TPM: 120000},
-	"unknown":   {RPM: 45, TPM: 90000},
 }
 
 func CombineLimits(a, b RateLimit) RateLimit {

@@ -10,6 +10,13 @@ func TestDelayForLimit(t *testing.T) {
 	}
 }
 
+func TestLimitForProviderNoBuiltinFallback(t *testing.T) {
+	limit := LimitForProvider("anthropic")
+	if limit.RPM != 0 || limit.TPM != 0 {
+		t.Fatalf("expected empty RateLimit without config, got RPM=%d TPM=%d", limit.RPM, limit.TPM)
+	}
+}
+
 func TestCombineLimits(t *testing.T) {
 	a := RateLimit{RPM: 30, TPM: 50000}
 	b := RateLimit{RPM: 20, TPM: 100000}

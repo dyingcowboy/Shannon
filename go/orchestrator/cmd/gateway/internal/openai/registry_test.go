@@ -138,36 +138,6 @@ func TestRegistryGetDefaultTemperature(t *testing.T) {
 	}
 }
 
-func TestRegistryGetRateLimit(t *testing.T) {
-	registry := newDefaultRegistry()
-
-	tests := []struct {
-		modelName            string
-		minRequestsPerMinute int
-		minTokensPerMinute   int
-	}{
-		{"shannon-chat", 1, 1},
-		{"shannon-deep-research", 1, 1},
-		{"", 1, 1},              // Default model
-		{"invalid-model", 1, 1}, // Falls back to default
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.modelName, func(t *testing.T) {
-			limit := registry.GetRateLimit(tt.modelName)
-			if limit == nil {
-				t.Fatal("GetRateLimit() returned nil")
-			}
-			if limit.RequestsPerMinute < tt.minRequestsPerMinute {
-				t.Errorf("RequestsPerMinute = %d, want >= %d", limit.RequestsPerMinute, tt.minRequestsPerMinute)
-			}
-			if limit.TokensPerMinute < tt.minTokensPerMinute {
-				t.Errorf("TokensPerMinute = %d, want >= %d", limit.TokensPerMinute, tt.minTokensPerMinute)
-			}
-		})
-	}
-}
-
 func TestModelConfigWorkflowModes(t *testing.T) {
 	registry := newDefaultRegistry()
 

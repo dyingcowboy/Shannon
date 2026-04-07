@@ -36,7 +36,6 @@ type Handler struct {
 	registry       *Registry
 	translator     *Translator
 	sessionManager *SessionManager
-	rateLimiter    *RateLimiter
 	adminURL      string // URL for SSE streaming (e.g., "http://orchestrator:8081")
 	llmServiceURL string
 	attStore       *attachments.Store
@@ -68,7 +67,6 @@ func NewHandler(
 		registry:       registry,
 		translator:     NewTranslator(registry),
 		sessionManager: NewSessionManager(redisClient, logger),
-		rateLimiter:    NewRateLimiter(redisClient, registry, logger),
 		adminURL:      strings.TrimRight(adminURL, "/"),
 		llmServiceURL: strings.TrimRight(llmURL, "/"),
 		attStore:       attachments.NewStore(redisClient, 30*time.Minute),
@@ -117,31 +115,6 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		metrics.RecordError(ErrorTypeInvalidRequest, ErrorCodeModelNotFound)
 		h.sendError(w, fmt.Sprintf("Model '%s' not found. Use GET /v1/models to list available models.", req.Model), ErrorTypeInvalidRequest, ErrorCodeModelNotFound, http.StatusNotFound)
 		return
-	}
-
-	// Get API key ID for rate limiting (use user ID as fallback)
-	apiKeyID := userCtx.UserID.String()
-	if userCtx.IsAPIKey && userCtx.APIKeyID != uuid.Nil {
-		apiKeyID = userCtx.APIKeyID.String()
-	}
-
-	// Check rate limits
-	rateLimitResult, err := h.rateLimiter.CheckLimit(ctx, apiKeyID, modelName)
-	if err != nil {
-		h.logger.Error("Rate limit check failed", zap.Error(err))
-		// Continue on error (fail open)
-	} else {
-		h.rateLimiter.SetRateLimitHeaders(w, rateLimitResult)
-		if !rateLimitResult.Allowed {
-			// Use the actual limit type that was exceeded (requests or tokens)
-			limitType := rateLimitResult.LimitType
-			if limitType == "" {
-				limitType = "requests" // fallback
-			}
-			metrics.RecordRateLimited(limitType)
-			h.sendError(w, "Rate limit exceeded. Please retry after the specified time.", ErrorTypeRateLimit, ErrorCodeRateLimitExceeded, http.StatusTooManyRequests)
-			return
-		}
 	}
 
 	// Resolve session (with collision handling)
@@ -238,14 +211,14 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Handle streaming vs non-streaming response
 	if translated.Stream {
-		h.handleStreamingResponse(ctx, w, r, resp.WorkflowId, translated.ModelName, &req, apiKeyID, metrics)
+		h.handleStreamingResponse(ctx, w, r, resp.WorkflowId, translated.ModelName, &req, metrics)
 	} else {
-		h.handleNonStreamingResponse(ctx, w, resp.TaskId, resp.WorkflowId, translated.ModelName, apiKeyID, metrics)
+		h.handleNonStreamingResponse(ctx, w, resp.TaskId, resp.WorkflowId, translated.ModelName, metrics)
 	}
 }
 
 // handleStreamingResponse connects to Shannon SSE and streams OpenAI-format chunks.
-func (h *Handler) handleStreamingResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, workflowID, modelName string, req *ChatCompletionRequest, apiKeyID string, metrics *MetricsRecorder) {
+func (h *Handler) handleStreamingResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, workflowID, modelName string, req *ChatCompletionRequest, metrics *MetricsRecorder) {
 	// Build SSE URL - include agent events for rich UI experiences
 	// LLM events: LLM_PARTIAL (streaming), LLM_OUTPUT (final)
 	// Stream lifecycle: STREAM_END
@@ -337,14 +310,11 @@ func (h *Handler) handleStreamingResponse(ctx context.Context, w http.ResponseWr
 	}
 	if usage != nil && usage.TotalTokens > 0 {
 		metrics.RecordTokens(usage.PromptTokens, usage.CompletionTokens)
-		if err := h.rateLimiter.RecordTokens(ctx, apiKeyID, modelName, usage.TotalTokens); err != nil {
-			h.logger.Debug("Failed to record token usage", zap.Error(err))
-		}
 	}
 }
 
 // handleNonStreamingResponse waits for completion and returns full response.
-func (h *Handler) handleNonStreamingResponse(ctx context.Context, w http.ResponseWriter, taskID, workflowID, modelName, apiKeyID string, metrics *MetricsRecorder) {
+func (h *Handler) handleNonStreamingResponse(ctx context.Context, w http.ResponseWriter, taskID, workflowID, modelName string, metrics *MetricsRecorder) {
 	// Poll for completion
 	var result string
 	var usage *Usage
@@ -381,9 +351,6 @@ func (h *Handler) handleNonStreamingResponse(ctx context.Context, w http.Respons
 				usage = h.getUsageFromDB(ctx, workflowID)
 				if usage != nil && usage.TotalTokens > 0 {
 					metrics.RecordTokens(usage.PromptTokens, usage.CompletionTokens)
-					if err := h.rateLimiter.RecordTokens(ctx, apiKeyID, modelName, usage.TotalTokens); err != nil {
-						h.logger.Debug("Failed to record token usage", zap.Error(err))
-					}
 				}
 				goto respond
 			case orchpb.TaskStatus_TASK_STATUS_FAILED:
@@ -647,11 +614,9 @@ func mustNewList(items []interface{}) *structpb.ListValue {
 	return list
 }
 
-// completionsRequestPeek is used to peek at model_tier and stream flag for rate limiting.
+// completionsRequestPeek is used to peek at the stream flag before proxying.
 type completionsRequestPeek struct {
-	ModelTier     string `json:"model_tier"`
-	SpecificModel string `json:"specific_model"`
-	Stream        bool   `json:"stream"`
+	Stream bool `json:"stream"`
 }
 
 // llmCompletionUsage represents token usage from the LLM service.
@@ -689,36 +654,9 @@ func (h *Handler) Completions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Peek-parse model_tier for rate limit bucketing
+	// Peek-parse stream flag before proxying
 	var reqPeek completionsRequestPeek
 	_ = json.Unmarshal(body, &reqPeek)
-	modelTier := reqPeek.ModelTier
-	if modelTier == "" {
-		modelTier = "small"
-	}
-	modelKey := "completions-" + modelTier
-
-	// Get API key ID for rate limiting
-	apiKeyID := userCtx.UserID.String()
-	if userCtx.IsAPIKey && userCtx.APIKeyID != uuid.Nil {
-		apiKeyID = userCtx.APIKeyID.String()
-	}
-
-	// Check rate limits
-	rateLimitResult, err := h.rateLimiter.CheckLimit(ctx, apiKeyID, modelKey)
-	if err != nil {
-		h.logger.Error("Rate limit check failed", zap.Error(err))
-	} else {
-		h.rateLimiter.SetRateLimitHeaders(w, rateLimitResult)
-		if !rateLimitResult.Allowed {
-			limitType := rateLimitResult.LimitType
-			if limitType == "" {
-				limitType = "requests"
-			}
-			h.sendError(w, "Rate limit exceeded. Please retry after the specified time.", ErrorTypeRateLimit, ErrorCodeRateLimitExceeded, http.StatusTooManyRequests)
-			return
-		}
-	}
 
 	// Generate tracking ID
 	requestID := uuid.New().String()
@@ -763,7 +701,7 @@ func (h *Handler) Completions(w http.ResponseWriter, r *http.Request) {
 
 	// Streaming: forward SSE from Python to client, capture usage from final event
 	if reqPeek.Stream {
-		h.handleCompletionsStream(ctx, w, resp, userCtx, requestID, apiKeyID, modelKey)
+		h.handleCompletionsStream(ctx, w, resp, userCtx, requestID)
 		return
 	}
 
@@ -785,10 +723,6 @@ func (h *Handler) Completions(w http.ResponseWriter, r *http.Request) {
 			userCtx.UserID, userCtx.TenantID, requestID,
 			llmResp.Provider, llmResp.Model, llmResp.Usage,
 		)
-		// Record rate limit tokens
-		if err := h.rateLimiter.RecordTokens(ctx, apiKeyID, modelKey, llmResp.Usage.TotalTokens); err != nil {
-			h.logger.Debug("Failed to record completion token usage", zap.Error(err))
-		}
 	}
 
 	h.logger.Info("Completions proxy response",
@@ -810,7 +744,7 @@ func (h *Handler) handleCompletionsStream(
 	w http.ResponseWriter,
 	resp *http.Response,
 	userCtx *auth.UserContext,
-	requestID, apiKeyID, modelKey string,
+	requestID string,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -878,9 +812,6 @@ func (h *Handler) handleCompletionsStream(
 					userCtx.UserID, userCtx.TenantID, requestID,
 					doneEvent.Provider, doneEvent.Model, doneEvent.Usage,
 				)
-				if err := h.rateLimiter.RecordTokens(ctx, apiKeyID, modelKey, doneEvent.Usage.TotalTokens); err != nil {
-					h.logger.Debug("Failed to record streaming completion token usage", zap.Error(err))
-				}
 			}
 		}
 	}

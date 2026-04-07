@@ -53,18 +53,6 @@ var (
 		[]string{"model", "error_type", "error_code"},
 	)
 
-	// Rate limiting metrics
-	RateLimitHits = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "openai_compat_rate_limit_hits_total",
-			Help: "Total number of rate limit hits",
-		},
-		[]string{"model", "limit_type"}, // limit_type: requests, tokens
-	)
-
-	// Note: RateLimitRemaining was removed to avoid high-cardinality issues
-	// with per-api-key labels. Use rate limit headers in responses instead.
-
 	// Session metrics
 	SessionsActive = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -175,12 +163,6 @@ func (m *MetricsRecorder) RecordError(errorType, errorCode string) {
 	RequestsTotal.WithLabelValues(m.model, m.endpoint, "error").Inc()
 	RequestLatency.WithLabelValues(m.model, m.endpoint, streamLabel).Observe(duration)
 	ErrorsTotal.WithLabelValues(m.model, errorType, errorCode).Inc()
-}
-
-// RecordRateLimited records a rate limited request
-func (m *MetricsRecorder) RecordRateLimited(limitType string) {
-	RequestsTotal.WithLabelValues(m.model, m.endpoint, "rate_limited").Inc()
-	RateLimitHits.WithLabelValues(m.model, limitType).Inc()
 }
 
 // RecordTokens records token usage

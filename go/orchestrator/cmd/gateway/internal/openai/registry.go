@@ -9,19 +9,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RateLimitConfig represents per-model rate limit settings.
-type RateLimitConfig struct {
-	RequestsPerMinute int `yaml:"requests_per_minute"`
-	TokensPerMinute   int `yaml:"tokens_per_minute"`
-}
-
 // ModelConfig represents a single model's configuration.
 type ModelConfig struct {
 	WorkflowMode     string                 `yaml:"workflow_mode"`      // simple, research, supervisor
 	Context          map[string]interface{} `yaml:"context"`            // Shannon context to inject
 	Description      string                 `yaml:"description"`        // Human-readable description
 	MaxTokensDefault int                    `yaml:"max_tokens_default"` // Default max_tokens
-	RateLimit        *RateLimitConfig       `yaml:"rate_limit"`         // Per-model rate limits
 }
 
 // RegistryConfig represents the full model registry configuration.
@@ -32,7 +25,6 @@ type RegistryConfig struct {
 		MaxTokensLimit     int              `yaml:"max_tokens_limit"`
 		DefaultTemperature float64          `yaml:"default_temperature"`
 		SessionTTL         int              `yaml:"session_ttl"`
-		DefaultRateLimit   *RateLimitConfig `yaml:"default_rate_limit"`
 	} `yaml:"settings"`
 }
 
@@ -222,28 +214,4 @@ func (r *Registry) IsValidModel(modelName string) bool {
 	return ok
 }
 
-// GetRateLimit returns the rate limit config for a model.
-// Falls back to default if model doesn't have specific limits.
-func (r *Registry) GetRateLimit(modelName string) *RateLimitConfig {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 
-	if modelName == "" {
-		modelName = r.config.DefaultModel
-	}
-
-	if model, ok := r.config.Models[modelName]; ok && model.RateLimit != nil {
-		return model.RateLimit
-	}
-
-	// Fall back to default
-	if r.config.Settings.DefaultRateLimit != nil {
-		return r.config.Settings.DefaultRateLimit
-	}
-
-	// Hardcoded fallback
-	return &RateLimitConfig{
-		RequestsPerMinute: 60,
-		TokensPerMinute:   200000,
-	}
-}

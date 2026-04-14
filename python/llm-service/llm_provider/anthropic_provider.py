@@ -23,6 +23,57 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# Optional prompt-cache metrics (per-source observability).
+# Labels: provider, model, source. `source` comes from CompletionRequest.cache_source
+# so we can see which call sites (agent_loop/decompose/tool_select/synthesis) are
+# paying the 2.0x 1h write premium without enough reads to break even.
+try:
+    from prometheus_client import Counter as _PromCounter
+
+    _CACHE_METRICS_ENABLED = True
+    ANTHROPIC_CACHE_READ_TOKENS = _PromCounter(
+        "anthropic_cache_read_tokens_total",
+        "Anthropic prompt cache read tokens (billed at 0.1x input)",
+        labelnames=("provider", "model", "source"),
+    )
+    ANTHROPIC_CACHE_WRITE_5M_TOKENS = _PromCounter(
+        "anthropic_cache_write_5m_tokens_total",
+        "Anthropic prompt cache write tokens at 5min TTL (billed at 1.25x input)",
+        labelnames=("provider", "model", "source"),
+    )
+    ANTHROPIC_CACHE_WRITE_1H_TOKENS = _PromCounter(
+        "anthropic_cache_write_1h_tokens_total",
+        "Anthropic prompt cache write tokens at 1h TTL (billed at 2.0x input)",
+        labelnames=("provider", "model", "source"),
+    )
+except Exception:
+    _CACHE_METRICS_ENABLED = False
+
+
+def _record_cache_metrics(
+    provider: str,
+    model: str,
+    source: Optional[str],
+    cache_read: int,
+    cache_creation: int,
+    cache_creation_1h: int,
+) -> None:
+    """Emit per-source cache metrics. Cheap no-op if prometheus is unavailable."""
+    if not _CACHE_METRICS_ENABLED:
+        return
+    src = source or "unknown"
+    try:
+        if cache_read:
+            ANTHROPIC_CACHE_READ_TOKENS.labels(provider, model, src).inc(cache_read)
+        cache_5m = max(0, cache_creation - cache_creation_1h)
+        if cache_5m:
+            ANTHROPIC_CACHE_WRITE_5M_TOKENS.labels(provider, model, src).inc(cache_5m)
+        if cache_creation_1h:
+            ANTHROPIC_CACHE_WRITE_1H_TOKENS.labels(provider, model, src).inc(cache_creation_1h)
+    except Exception:
+        # Metrics must never break the request path
+        pass
+
 
 CACHE_BREAK_MARKER = "<!-- cache_break -->"
 VOLATILE_MARKER = "<!-- volatile -->"
@@ -587,6 +638,15 @@ class AnthropicProvider(LLMProvider):
             cache_creation_1h_tokens=cache_creation_1h,
         )
 
+        _record_cache_metrics(
+            self.config.get("name", "anthropic"),
+            model,
+            request.cache_source,
+            cache_read,
+            cache_creation,
+            cache_creation_1h,
+        )
+
         # Build response
         return CompletionResponse(
             content=content,
@@ -629,34 +689,82 @@ class AnthropicProvider(LLMProvider):
                 # After streaming completes, get the final message with usage and tool calls
                 final_message = await stream.get_final_message()
 
-                # Check for tool use in the final message
+                # Check for tool use in the final message. Parity with the
+                # non-stream complete() path: handle both SDK objects and dicts
+                # so Anthropic-compatible providers (e.g. MiniMax) don't drop
+                # tool calls that arrive as dict-shaped content blocks.
                 function_calls = []
                 if final_message and hasattr(final_message, "content"):
                     for content_block in final_message.content:
-                        if hasattr(content_block, "type") and content_block.type == "tool_use":
-                            function_calls.append({
-                                "id": content_block.id,
-                                "name": content_block.name,
-                                "arguments": content_block.input,
-                            })
+                        block_type = getattr(content_block, "type", None) or (
+                            content_block.get("type") if isinstance(content_block, dict) else None
+                        )
+                        if block_type != "tool_use":
+                            continue
+                        block_id = getattr(content_block, "id", None) or (
+                            content_block.get("id") if isinstance(content_block, dict) else None
+                        )
+                        block_name = getattr(content_block, "name", None) or (
+                            content_block.get("name") if isinstance(content_block, dict) else None
+                        )
+                        block_input = getattr(content_block, "input", None) or (
+                            content_block.get("input") if isinstance(content_block, dict) else None
+                        )
+                        function_calls.append({
+                            "id": block_id,
+                            "name": block_name,
+                            "arguments": block_input,
+                        })
 
                 if final_message and hasattr(final_message, "usage"):
-                    cache_read = getattr(final_message.usage, "cache_read_input_tokens", 0) or 0
-                    cache_creation = getattr(final_message.usage, "cache_creation_input_tokens", 0) or 0
+                    # Handle both SDK objects and dicts (MiniMax / Anthropic-compat
+                    # provider parity with the non-stream complete() path above).
+                    usage = final_message.usage
+                    if isinstance(usage, dict):
+                        input_tokens = usage.get("input_tokens", 0) or 0
+                        output_tokens = usage.get("output_tokens", 0) or 0
+                        cache_read = usage.get("cache_read_input_tokens", 0) or 0
+                        cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
+                        cc = usage.get("cache_creation")
+                        cache_creation_1h = (
+                            cc.get("ephemeral_1h_input_tokens", 0) or 0
+                            if isinstance(cc, dict) else 0
+                        )
+                    else:
+                        input_tokens = usage.input_tokens
+                        output_tokens = usage.output_tokens
+                        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                        # Per-TTL cache creation breakdown (1h vs 5min). Without
+                        # this the 1h TTL slice silently drops from cost accounting.
+                        cache_creation_1h = 0
+                        cc = getattr(usage, "cache_creation", None)
+                        if cc is not None:
+                            cache_creation_1h = getattr(cc, "ephemeral_1h_input_tokens", 0) or 0
                     cost = self.estimate_cost(
-                        final_message.usage.input_tokens,
-                        final_message.usage.output_tokens,
+                        input_tokens,
+                        output_tokens,
                         model,
                         cache_read_tokens=cache_read,
                         cache_creation_tokens=cache_creation,
+                        cache_creation_1h_tokens=cache_creation_1h,
+                    )
+                    _record_cache_metrics(
+                        self.config.get("name", "anthropic"),
+                        model,
+                        request.cache_source,
+                        cache_read,
+                        cache_creation,
+                        cache_creation_1h,
                     )
                     result = {
                         "usage": {
-                            "total_tokens": final_message.usage.input_tokens + final_message.usage.output_tokens,
-                            "input_tokens": final_message.usage.input_tokens,
-                            "output_tokens": final_message.usage.output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
                             "cache_read_tokens": cache_read,
                             "cache_creation_tokens": cache_creation,
+                            "cache_creation_1h_tokens": cache_creation_1h,
                             "cost_usd": cost,
                             "call_sequence": self._cache_break_detector.call_count,
                         },

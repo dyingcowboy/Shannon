@@ -1742,6 +1742,7 @@ async def agent_query(request: Request, query: AgentQuery):
                         workflow_id=request.headers.get("X-Workflow-ID")
                         or request.headers.get("x-workflow-id"),
                         agent_id=query.agent_id,
+                        cache_source="agent_execute_stream",
                     ):
                         if not chunk:
                             continue
@@ -1898,6 +1899,7 @@ async def agent_query(request: Request, query: AgentQuery):
                     workflow_id=request.headers.get("X-Workflow-ID")
                     or request.headers.get("x-workflow-id"),
                     agent_id=query.agent_id,
+                    cache_source="agent_execute",
                 )
                 last_result_data = result_data
 
@@ -2258,6 +2260,7 @@ async def agent_query(request: Request, query: AgentQuery):
                     workflow_id=request.headers.get("X-Workflow-ID")
                     or request.headers.get("x-workflow-id"),
                     agent_id=query.agent_id,
+                    cache_source="interpretation",
                 )
                 raw_interpretation = interpretation_result.get("output_text", "")
 
@@ -2372,6 +2375,7 @@ async def agent_query(request: Request, query: AgentQuery):
                         workflow_id=request.headers.get("X-Workflow-ID")
                         or request.headers.get("x-workflow-id"),
                         agent_id=query.agent_id,
+                        cache_source="stub_cleanup",
                     )
                     cleaned_text = stub_cleanup_result.get("output_text", "")
                     if cleaned_text and not any(_re.search(p, cleaned_text, _re.IGNORECASE) for p in stub_patterns):
@@ -3831,6 +3835,7 @@ async def agent_loop_step(request: Request, body: AgentLoopStepRequest) -> Agent
                 gen_kwargs["response_format"] = {"type": "json_object"}
         if body.previous_response_id:
             gen_kwargs["previous_response_id"] = body.previous_response_id
+        gen_kwargs.setdefault("cache_source", "agent_loop")
 
         result = await providers.generate_completion(
             messages=messages,
@@ -4796,6 +4801,7 @@ async def decompose_task(request: Request, query: AgentQuery) -> DecompositionRe
                     if settings and settings.decomposition_model_id
                     else None
                 ),
+                cache_source="decompose",
             )
 
             import json as _json

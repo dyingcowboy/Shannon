@@ -226,6 +226,22 @@ func TestCostForSplitWithCache(t *testing.T) {
 			wantMin:             0.011161,
 			wantMax:             0.011164,
 		},
+		{
+			// MiniMax-M2.7: input 0.00033/1K, output 0.00133/1K, cache separate (Anthropic-style).
+			// base = 5000/1000 * 0.00033 + 1000/1000 * 0.00133 = 0.00165 + 0.00133 = 0.00298
+			// cache_read at 10%: + 3000/1000 * 0.00033 * 0.1 = 0.000099
+			// cache_creation at 125%: + 2000/1000 * 0.00033 * 1.25 = 0.000825
+			// expected = 0.00298 + 0.000099 + 0.000825 = 0.003904
+			name:                "minimax_cache_separate",
+			model:               "MiniMax-M2.7",
+			inputTokens:         5000,
+			outputTokens:        1000,
+			cacheReadTokens:     3000,
+			cacheCreationTokens: 2000,
+			provider:            "minimax",
+			wantMin:             0.003903,
+			wantMax:             0.003905,
+		},
 	}
 
 	for _, tt := range tests {

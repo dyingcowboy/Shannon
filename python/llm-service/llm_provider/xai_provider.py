@@ -302,6 +302,7 @@ class XAIProvider(LLMProvider):
             output_tokens=completion_tokens,
             total_tokens=total_tokens,
             estimated_cost=estimated_cost,
+            cache_read_tokens=cached_tokens,
         )
 
         response_obj = CompletionResponse(
@@ -439,6 +440,7 @@ class XAIProvider(LLMProvider):
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 estimated_cost=cost,
+                cache_read_tokens=cached_tokens,
             ),
             finish_reason="stop",
             function_call=None,

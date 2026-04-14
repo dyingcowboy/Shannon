@@ -62,30 +62,27 @@ model_tiers:
       - provider: openai
         model: gpt-5-mini-2025-08-07
         priority: 3
-      - provider: xai
-        model: grok-4-1-fast-non-reasoning
-        priority: 4
       - provider: google
         model: gemini-2.5-flash
-        priority: 5
+        priority: 4
       - provider: meta
         model: llama-4-scout
-        priority: 6
+        priority: 5
       - provider: deepseek
         model: deepseek-chat
-        priority: 7
+        priority: 6
       - provider: qwen
         model: qwen3-8b
-        priority: 8
+        priority: 7
       - provider: zai
         model: glm-4.7
-        priority: 9
+        priority: 8
       - provider: kimi
         model: kimi-k2.5
-        priority: 10
+        priority: 9
       - provider: minimax
         model: MiniMax-M2.7
-        priority: 11
+        priority: 10
 
   large:
     # Target allocation: 10% (not enforced - actual usage depends on complexity)

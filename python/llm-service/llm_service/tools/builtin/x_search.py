@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
+from llm_provider.base import compute_token_cost
+
 from ..base import Tool, ToolMetadata, ToolParameter, ToolParameterType, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -32,8 +34,6 @@ _X_SEARCH_COST_PER_CALL = 0.005
 # Source of truth is config/models.yaml; these mirror grok-4-1-fast as of 2026-04.
 _FALLBACK_INPUT_PER_1K = 0.0002   # $0.20 / 1M
 _FALLBACK_OUTPUT_PER_1K = 0.0005  # $0.50 / 1M
-# xAI cached input is 25% of base (e.g. $0.05/1M vs $0.20/1M)
-_XAI_CACHED_INPUT_MULTIPLIER = 0.25
 
 _XAI_PRICING_CACHE: Optional[Dict[str, Dict[str, float]]] = None
 
@@ -66,6 +66,48 @@ def _load_xai_pricing() -> Dict[str, Dict[str, float]]:
     return result
 
 
+_XAI_BASE_URL_CACHE: Optional[str] = None
+
+
+def _resolve_xai_base_url() -> str:
+    """Resolve the xAI Responses API base URL for x_search.
+
+    Precedence:
+    1. ``XAI_BASE_URL`` env var (if non-empty) — explicit opt-in.
+    2. Public default ``https://api.x.ai/v1``.
+
+    We intentionally do NOT auto-inherit ``provider_settings.xai.base_url``
+    from ``config/models.yaml``: that URL is set for the chat-completions
+    path and may point at an OpenAI-compatible proxy that does not expose
+    the ``/responses`` endpoint or the server-side ``x_search`` tool.
+    Operators who want x_search routed through a proxy must set
+    ``XAI_BASE_URL`` explicitly.
+
+    Empty-string env values are treated as unset, so a misconfigured
+    deployment template won't produce an invalid ``/responses`` URL.
+    """
+    global _XAI_BASE_URL_CACHE
+    if _XAI_BASE_URL_CACHE is not None:
+        return _XAI_BASE_URL_CACHE
+
+    env_url = os.getenv("XAI_BASE_URL", "").strip()
+    if env_url:
+        _XAI_BASE_URL_CACHE = env_url.rstrip("/")
+    else:
+        _XAI_BASE_URL_CACHE = "https://api.x.ai/v1"
+    return _XAI_BASE_URL_CACHE
+
+
+def _reload_caches() -> None:
+    """Drop module-level pricing/base-url caches so the next call re-reads env
+    and ``config/models.yaml``. Intended for hot-reload hooks and tests; no
+    watcher is wired up yet (caches remain process-lifetime by default).
+    """
+    global _XAI_PRICING_CACHE, _XAI_BASE_URL_CACHE
+    _XAI_PRICING_CACHE = None
+    _XAI_BASE_URL_CACHE = None
+
+
 def _get_token_prices(model: str) -> Tuple[float, float]:
     """Return (input_per_1k, output_per_1k) for an xAI model, with safe fallback."""
     pricing = _load_xai_pricing()
@@ -96,7 +138,10 @@ class XSearchTool(Tool):
             requires_auth=True,
             rate_limit=int(os.getenv("X_SEARCH_RATE_LIMIT", str(_DEFAULT_RATE_LIMIT))),
             timeout_seconds=int(os.getenv("X_SEARCH_TIMEOUT", str(_DEFAULT_TIMEOUT))),
-            cost_per_use=_X_SEARCH_COST_PER_CALL,
+            # Real cost is per-call fee × N calls + token cost; reported via
+            # ToolResult.cost_usd. cost_per_use stays 0 so callers that fall
+            # back to the static metadata field don't systematically undercount.
+            cost_per_use=0.0,
         )
 
     def _get_parameters(self) -> List[ToolParameter]:
@@ -165,6 +210,9 @@ class XSearchTool(Tool):
 
         model = os.getenv("X_SEARCH_MODEL", _DEFAULT_MODEL)
         timeout = int(os.getenv("X_SEARCH_TIMEOUT", str(_DEFAULT_TIMEOUT)))
+        # Honor xAI base URL from (in order): XAI_BASE_URL env, provider_settings.xai.base_url
+        # in config/models.yaml, or public xAI. Matches the resolution XAIProvider uses.
+        responses_url = f"{_resolve_xai_base_url()}/responses"
 
         # Build x_search tool parameters
         x_search_params: Dict[str, Any] = {}
@@ -233,7 +281,7 @@ class XSearchTool(Tool):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
-                    "https://api.x.ai/v1/responses",
+                    responses_url,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -275,15 +323,19 @@ class XSearchTool(Tool):
         # xAI Responses API: cached_tokens nested under input_tokens_details
         input_details = usage.get("input_tokens_details") or {}
         cached_tokens = int(input_details.get("cached_tokens", 0) or 0)
-        uncached_input = max(0, input_tokens - cached_tokens)
 
-        # Cost: x_search per-call fee + token cost (centralized pricing + cache-aware)
+        # Cost: x_search per-call fee + token cost (centralized pricing + cache-aware).
+        # Delegate token math to the shared helper so xAI/Kimi/Anthropic/OpenAI
+        # cache semantics stay in one place (llm_provider.base.compute_token_cost).
         input_per_1k, output_per_1k = _get_token_prices(model)
-        token_cost = (
-            uncached_input * input_per_1k
-            + cached_tokens * input_per_1k * _XAI_CACHED_INPUT_MULTIPLIER
-            + output_tokens * output_per_1k
-        ) / 1000.0
+        token_cost = compute_token_cost(
+            input_per_1k=input_per_1k,
+            output_per_1k=output_per_1k,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cached_tokens,
+            provider="xai",
+        )
         search_cost = x_search_calls * _X_SEARCH_COST_PER_CALL
         total_cost = token_cost + search_cost
 

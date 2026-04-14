@@ -745,22 +745,41 @@ class TestAdvancedToolUseBetaHeader:
         assert not any(t.get("defer_loading") for t in api_req["tools"])
 
     def test_env_escape_hatch_disables_beta(self, monkeypatch):
-        """When SHANNON_NO_ADVANCED_TOOL_USE_BETA=1 set, header should NOT be added.
+        """SHANNON_NO_ADVANCED_TOOL_USE_BETA=1 suppresses the advanced-tool-use token.
 
-        This test documents the escape-hatch contract. Since the actual header
-        is applied in complete()/stream_complete() (not _build_api_request),
-        we verify by checking the env var is respected by the production helper.
+        Behavioral test against _build_beta_header: with the env var set,
+        even when any_deferred=True the returned header must omit the
+        advanced-tool-use-2025-11-20 token.
         """
+        from llm_provider.anthropic_provider import _build_beta_header
+
+        # Escape hatch OFF → advanced-tool-use present when deferred set
+        monkeypatch.delenv("SHANNON_NO_ADVANCED_TOOL_USE_BETA", raising=False)
+        hdr_on = _build_beta_header(thinking=False, any_deferred=True)
+        assert hdr_on == "advanced-tool-use-2025-11-20"
+
+        # Escape hatch ON → token suppressed, helper returns None (no beta needed)
         monkeypatch.setenv("SHANNON_NO_ADVANCED_TOOL_USE_BETA", "1")
-        # The production helper isn't directly unit-testable without mocking
-        # the Anthropic SDK; this test is a guard that the env var exists in code.
-        import inspect
-        from llm_provider import anthropic_provider
-        src = inspect.getsource(anthropic_provider)
-        assert "SHANNON_NO_ADVANCED_TOOL_USE_BETA" in src, \
-            "escape hatch env var not referenced in anthropic_provider.py"
-        assert "advanced-tool-use-2025-11-20" in src, \
-            "advanced-tool-use beta token not present"
+        assert _build_beta_header(thinking=False, any_deferred=True) is None
+
+        # Thinking remains independent of the escape hatch
+        assert _build_beta_header(thinking=True, any_deferred=True) == \
+            "interleaved-thinking-2025-05-14"
+
+    def test_beta_header_merges_thinking_and_advanced_tool_use(self, monkeypatch):
+        """When both thinking and deferred are set (escape hatch OFF), header contains both tokens."""
+        from llm_provider.anthropic_provider import _build_beta_header
+        monkeypatch.delenv("SHANNON_NO_ADVANCED_TOOL_USE_BETA", raising=False)
+        hdr = _build_beta_header(thinking=True, any_deferred=True)
+        assert hdr is not None
+        tokens = hdr.split(",")
+        assert "interleaved-thinking-2025-05-14" in tokens
+        assert "advanced-tool-use-2025-11-20" in tokens
+
+    def test_beta_header_returns_none_when_no_feature_needed(self):
+        """Neither thinking nor deferred → None (no header injected)."""
+        from llm_provider.anthropic_provider import _build_beta_header
+        assert _build_beta_header(thinking=False, any_deferred=False) is None
 
 
 class TestToolReferencePreserved:

@@ -59,6 +59,39 @@ class ModelConfig:
         return f"{self.provider}:{self.model_id}"
 
 
+def compute_token_cost(
+    input_per_1k: float,
+    output_per_1k: float,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cache_creation_1h_tokens: int = 0,
+    provider: str = "openai",
+) -> float:
+    """Pure cache-aware token cost (USD).
+
+    Single source of truth for provider cache semantics. Mirrors Go's
+    pricing.CostForSplitWithCache. Used by LLMProvider.estimate_cost and by
+    tools (e.g. x_search) that compute cost without a full provider instance.
+    """
+    input_cost = (input_tokens / 1000) * input_per_1k
+    output_cost = (output_tokens / 1000) * output_per_1k
+    if provider in ("anthropic", "minimax"):
+        # Cache tokens are separate from input_tokens.
+        input_cost += (cache_read_tokens / 1000) * input_per_1k * 0.1
+        cache_5m = max(0, cache_creation_tokens - cache_creation_1h_tokens)
+        input_cost += (cache_5m / 1000) * input_per_1k * 1.25
+        input_cost += (cache_creation_1h_tokens / 1000) * input_per_1k * 2.0
+    elif provider in ("kimi", "xai") and cache_read_tokens > 0:
+        # Cached tokens included in input at full price; bill at 25% (75% discount).
+        input_cost -= (cache_read_tokens / 1000) * input_per_1k * 0.75
+    elif cache_read_tokens > 0:
+        # OpenAI default: cached tokens in input at full price, bill at 50%.
+        input_cost -= (cache_read_tokens / 1000) * input_per_1k * 0.5
+    return input_cost + output_cost
+
+
 @dataclass
 class TokenUsage:
     """Token usage tracking"""
@@ -238,31 +271,16 @@ class LLMProvider(ABC):
             return 0.0
 
         model_config = self.models[model]
-        input_price = model_config.input_price_per_1k
-        output_price = model_config.output_price_per_1k
-
-        input_cost = (input_tokens / 1000) * input_price
-        output_cost = (output_tokens / 1000) * output_price
-
-        # Prompt cache pricing adjustments
-        if model_config.provider in ("anthropic", "minimax"):
-            # Anthropic & MiniMax: cache tokens are separate from input_tokens
-            # Read at 10% of input price
-            input_cost += (cache_read_tokens / 1000) * input_price * 0.1
-            # Write: 5min TTL at 1.25x, 1h TTL at 2x base input price
-            cache_5m = max(0, cache_creation_tokens - cache_creation_1h_tokens)
-            input_cost += (cache_5m / 1000) * input_price * 1.25
-            input_cost += (cache_creation_1h_tokens / 1000) * input_price * 2.0
-        elif model_config.provider == "kimi" and cache_read_tokens > 0:
-            # Kimi: cached tokens included in prompt_tokens at full price,
-            # actual billing is 25% (75% discount) — subtract the 75% discount
-            input_cost -= (cache_read_tokens / 1000) * input_price * 0.75
-        elif cache_read_tokens > 0:
-            # OpenAI: cached tokens are already included in input_tokens at full price,
-            # but actual billing is 50% — subtract the 50% discount
-            input_cost -= (cache_read_tokens / 1000) * input_price * 0.5
-
-        return input_cost + output_cost
+        return compute_token_cost(
+            input_per_1k=model_config.input_price_per_1k,
+            output_per_1k=model_config.output_price_per_1k,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
+            provider=model_config.provider,
+        )
 
     def _load_models_from_config(self, allow_empty: bool = False) -> None:
         """Populate provider models from configuration dictionary."""

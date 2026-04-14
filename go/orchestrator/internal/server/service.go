@@ -1720,7 +1720,14 @@ func (s *OrchestratorService) GetTaskStatus(ctx context.Context, req *pb.GetTask
 							var input, output, cr, cc int
 							var cost float64
 							if err := rows.Scan(&model, &provider, &input, &output, &cr, &cc, &cost); err == nil {
-								costWithout := pricing.CostForSplit(model, input+cr+cc, output)
+								// Anthropic/MiniMax: input excludes cache tokens, reconstruct by adding them back.
+								// OpenAI/xAI/Kimi: input already includes cache tokens; use as-is.
+								var costWithout float64
+								if provider == "anthropic" || provider == "minimax" {
+									costWithout = pricing.CostForSplit(model, input+cr+cc, output)
+								} else {
+									costWithout = pricing.CostForSplit(model, input, output)
+								}
 								if costWithout > cost {
 									totalSavings += costWithout - cost
 								}

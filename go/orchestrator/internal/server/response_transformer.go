@@ -302,10 +302,19 @@ func extractUsage(result workflows.TaskResult) ResponseUsage {
 				provider = p
 			}
 			if model != "" {
-				// Single-model workflow: precise calculation
+				// Single-model workflow: precise calculation.
+				// For Anthropic, input_tokens EXCLUDES cached tokens, so reconstructing
+				// the uncached cost requires adding them back. For OpenAI/xAI/Kimi,
+				// input_tokens already INCLUDES cached tokens, so CostForSplit on
+				// input_tokens alone is the correct uncached baseline.
 				costWithCache := pricing.CostForSplitWithCache(model, usage.InputTokens, usage.OutputTokens,
 					usage.CacheReadTokens, usage.CacheCreationTokens, provider)
-				costWithoutCache := pricing.CostForSplit(model, usage.InputTokens+usage.CacheReadTokens+usage.CacheCreationTokens, usage.OutputTokens)
+				var costWithoutCache float64
+				if provider == "anthropic" || provider == "minimax" {
+					costWithoutCache = pricing.CostForSplit(model, usage.InputTokens+usage.CacheReadTokens+usage.CacheCreationTokens, usage.OutputTokens)
+				} else {
+					costWithoutCache = pricing.CostForSplit(model, usage.InputTokens, usage.OutputTokens)
+				}
 				if costWithoutCache > costWithCache {
 					usage.CacheSavingsUSD = costWithoutCache - costWithCache
 				}

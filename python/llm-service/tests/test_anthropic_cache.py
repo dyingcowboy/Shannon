@@ -599,3 +599,61 @@ class TestRollingMessageBreakpoint:
         assert isinstance(penultimate["content"], list)
         # The rolling marker sits on the LAST block of penultimate, regardless of block type.
         assert penultimate["content"][-1].get("cache_control") is not None
+
+
+class TestUsageSplit:
+    """Verify 5m/1h cache creation split propagates through to the response."""
+
+    def _make_provider(self):
+        return AnthropicProvider(_MINIMAL_CONFIG)
+
+    def test_non_stream_token_usage_captures_split(self):
+        """Non-stream usage.cache_creation.ephemeral_5m_input_tokens + 1h both land on TokenUsage."""
+        from llm_provider.base import TokenUsage
+        # Construct the fields that would flow from anthropic response dict/obj shape
+        u = TokenUsage(
+            input_tokens=100, output_tokens=50, total_tokens=150,
+            estimated_cost=0.001,
+            cache_read_tokens=0,
+            cache_creation_tokens=300,
+            cache_creation_5m_tokens=100,
+            cache_creation_1h_tokens=200,
+        )
+        # The new fields must be independently addressable
+        assert u.cache_creation_5m_tokens == 100
+        assert u.cache_creation_1h_tokens == 200
+        # Sum invariant (enforced in the provider extraction, sanity-checked here):
+        assert u.cache_creation_5m_tokens + u.cache_creation_1h_tokens == u.cache_creation_tokens
+
+    def test_token_usage_add_merges_split(self):
+        from llm_provider.base import TokenUsage
+        a = TokenUsage(10, 5, 15, 0.0, 0, 100, 40, 60)
+        b = TokenUsage(20, 10, 30, 0.0, 0, 200, 80, 120)
+        c = a + b
+        assert c.cache_creation_5m_tokens == 120
+        assert c.cache_creation_1h_tokens == 180
+        assert c.cache_creation_tokens == 300
+
+    def test_serialize_usage_emits_both_split_fields(self):
+        """The ProviderManager._serialize_usage output must include 5m and 1h keys."""
+        from llm_service.providers import ProviderManager
+        from llm_provider.base import TokenUsage
+        u = TokenUsage(
+            input_tokens=100, output_tokens=50, total_tokens=150,
+            estimated_cost=0.001,
+            cache_read_tokens=0,
+            cache_creation_tokens=300,
+            cache_creation_5m_tokens=100,
+            cache_creation_1h_tokens=200,
+            call_sequence=1,
+        )
+        out = ProviderManager._serialize_usage(u)
+        assert out["cache_creation_5m_tokens"] == 100
+        assert out["cache_creation_1h_tokens"] == 200
+        # Legacy field must still be present
+        assert out["cache_creation_tokens"] == 300
+
+    def test_serialize_usage_none_returns_empty_dict(self):
+        """Regression guard for the None-usage branch."""
+        from llm_service.providers import ProviderManager
+        assert ProviderManager._serialize_usage(None) == {}

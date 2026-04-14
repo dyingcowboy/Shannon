@@ -639,18 +639,21 @@ class AnthropicProvider(LLMProvider):
             cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
         # Extract per-TTL cache creation breakdown (1h vs 5min)
         cache_creation_1h = 0
+        cache_creation_5m = 0
         if isinstance(usage, dict):
             cc = usage.get("cache_creation")
             if isinstance(cc, dict):
                 cache_creation_1h = cc.get("ephemeral_1h_input_tokens", 0) or 0
+                cache_creation_5m = cc.get("ephemeral_5m_input_tokens", 0) or 0
         else:
             cc = getattr(usage, "cache_creation", None)
             if cc is not None:
                 cache_creation_1h = getattr(cc, "ephemeral_1h_input_tokens", 0) or 0
+                cache_creation_5m = getattr(cc, "ephemeral_5m_input_tokens", 0) or 0
 
         total_tokens = input_tokens + output_tokens
         if cache_read > 0 or cache_creation > 0:
-            logger.info(f"Anthropic prompt cache: read={cache_read}, creation={cache_creation} (1h={cache_creation_1h}), input={input_tokens}")
+            logger.info(f"Anthropic prompt cache: read={cache_read}, creation={cache_creation} (5m={cache_creation_5m}, 1h={cache_creation_1h}), input={input_tokens}")
         logger.info(f"Anthropic complete: model={model}, structured_output={bool(request.output_config)}, input={input_tokens}, output={output_tokens}")
 
         # Calculate cost (including prompt cache pricing)
@@ -681,6 +684,8 @@ class AnthropicProvider(LLMProvider):
                 estimated_cost=cost,
                 cache_read_tokens=cache_read,
                 cache_creation_tokens=cache_creation,
+                cache_creation_5m_tokens=cache_creation_5m,
+                cache_creation_1h_tokens=cache_creation_1h,
                 call_sequence=self._cache_break_detector.call_count,
             ),
             finish_reason=response.stop_reason or "stop",
@@ -752,6 +757,10 @@ class AnthropicProvider(LLMProvider):
                             cc.get("ephemeral_1h_input_tokens", 0) or 0
                             if isinstance(cc, dict) else 0
                         )
+                        cache_creation_5m = (
+                            cc.get("ephemeral_5m_input_tokens", 0) or 0
+                            if isinstance(cc, dict) else 0
+                        )
                     else:
                         input_tokens = usage.input_tokens
                         output_tokens = usage.output_tokens
@@ -760,9 +769,11 @@ class AnthropicProvider(LLMProvider):
                         # Per-TTL cache creation breakdown (1h vs 5min). Without
                         # this the 1h TTL slice silently drops from cost accounting.
                         cache_creation_1h = 0
+                        cache_creation_5m = 0
                         cc = getattr(usage, "cache_creation", None)
                         if cc is not None:
                             cache_creation_1h = getattr(cc, "ephemeral_1h_input_tokens", 0) or 0
+                            cache_creation_5m = getattr(cc, "ephemeral_5m_input_tokens", 0) or 0
                     cost = self.estimate_cost(
                         input_tokens,
                         output_tokens,
@@ -786,6 +797,7 @@ class AnthropicProvider(LLMProvider):
                             "output_tokens": output_tokens,
                             "cache_read_tokens": cache_read,
                             "cache_creation_tokens": cache_creation,
+                            "cache_creation_5m_tokens": cache_creation_5m,
                             "cache_creation_1h_tokens": cache_creation_1h,
                             "cost_usd": cost,
                             "call_sequence": self._cache_break_detector.call_count,

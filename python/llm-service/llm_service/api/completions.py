@@ -31,6 +31,7 @@ class CompletionRequest(BaseModel):
     thinking: Optional[Dict[str, Any]] = Field(default=None, description="Anthropic extended thinking config")
     reasoning_effort: Optional[str] = Field(default=None, description="OpenAI reasoning effort (minimal/low/medium/high)")
     session_id: Optional[str] = Field(default=None, description="Session id; enables cross-turn rolling cache_control marker preservation")
+    cache_source: Optional[str] = Field(default=None, description="Call-site origin for prompt-cache TTL routing (e.g. tui, shanclaw, oneshot_cli)")
 
 
 @router.post("/")
@@ -124,7 +125,7 @@ async def generate_completion(request: Request, body: CompletionRequest):
                 agent_id=ag_id,
                 thinking=body.thinking,
                 reasoning_effort=body.reasoning_effort,
-                cache_source="completions_proxy",
+                cache_source=body.cache_source or "completions_proxy",
                 session_id=body.session_id,
             )
         except Exception as e:
@@ -172,7 +173,7 @@ async def _stream_completion(request, body, providers, tier):
             tools=body.tools,
             thinking=body.thinking,
             reasoning_effort=body.reasoning_effort,
-            cache_source="completions_proxy_stream",
+            cache_source=body.cache_source or "completions_proxy_stream",
             session_id=body.session_id,
         ):
             if isinstance(chunk, str):
